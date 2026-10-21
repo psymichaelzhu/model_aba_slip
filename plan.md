@@ -1,0 +1,1 @@
+其他文件可以按需复制过来：requirements.txt 和 environment.yml 用于以后重建环境；script/preprocessing/ 用于以后重新做预处理。这些都不影响实验运行。

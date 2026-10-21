@@ -1,0 +1,37 @@
+# macOS system cache
+.DS_Store
+
+# Python runtime cache
+__pycache__/
+
+# Virtual environment
+venv/
+
+# RStudio cache
+.Rproj.user/
+
+
+# Large files (preserve directory structure)
+
+## Stimuli
+/stimuli/**
+!/stimuli/**/
+!/stimuli/**/.gitkeep
+
+
+# Entirely excluded directories
+
+## Pipeline outputs
+/cache/
+/experiment_results/
+/analysis_results/
+
+## Checkpoints
+/checkpoints/
+
+## Testing files
+/test/
+/playground/
+
+## Previous versions
+/deprecated/

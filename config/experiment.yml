@@ -1,0 +1,52 @@
+# %% Layouts
+layouts:
+  pair_grey_224: &pair_grey_224
+    unit: pixel
+    canvas_size: [224, 224]
+    item_size: [96, 96]
+    positions: [[0, 64], [128, 64]]
+    background: [128, 128, 128]
+  pair_white_224: {<<: *pair_grey_224, background: [255, 255, 255]}
+  pair_black_224: {<<: *pair_grey_224, background: [0, 0, 0]}
+
+# %% Trial designs
+trial_designs:
+  pair_100k: {n_trials: 100000, n_items_per_trial: 2, sampling_seed: 42}
+
+# %% Metrics
+metrics:
+  core:
+    embedding_similarity:
+      semi_visual: {present: semi, embedding_function: visual}
+    attention_layer:
+      last_mean_mean: {layer: -1, head_aggregation: mean, region_summary: mean}
+    attention_rollout:
+      mean_000_mean: {head_aggregation: mean, discard_ratio: 0.0, region_summary: mean}
+
+# %% Model sets
+# Each set is a grid over model coordinates; models are expanded in config/__init__.py.
+model_sets:
+  fbslip_yfcc15m_25ep:
+    source: [fb_slip]
+    size: [small, base, large]
+    training: [clip, simclr, slip]
+    dataset: [yfcc15m]
+    epochs: [25]
+  fbslip_untrained:
+    source: [fb_slip]
+    training: [untrained]
+    size: [small, base, large]
+    seed: [0, 1, 2]
+
+# %% Sweeps
+sweeps:
+  main_pair_100k:
+    trial_design: pair_100k
+    metrics: core
+    layouts: [pair_white_224, pair_black_224]
+    models: [fbslip_yfcc15m_25ep, fbslip_untrained]
+    stimuli: {OASIS: [all], EmoMadrid: [all], NAPS: [all]}
+
+# %% Active run
+run:
+  sweep: main_pair_100k
