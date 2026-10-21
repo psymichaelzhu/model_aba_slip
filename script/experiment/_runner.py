@@ -80,6 +80,9 @@ def main():
     sweep_id = parser.parse_args().sweep
 
     experiments = resolve_sweep(sweep_id)
+    for experiment in experiments:
+        record.validate_snapshot(experiment)
+
     record.write_sweep_snapshot(sweep_id, experiments)
     pending = [
         experiment for experiment in experiments

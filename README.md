@@ -74,6 +74,18 @@ Sets may overlap: models are deduplicated by `(source, model_id)` within a sweep
 `INFERENCE_BATCH_SIZES` (per model size), `CHUNK_SIZE` and `MAX_ATTEMPTS` depend on
 the machine and do not affect results.
 
+Install Parquet support with `pip install "pyarrow>=14,<20"` (Python 3.9).
+
+To migrate old CSV results (completed and partial), run:
+
+```bash
+python -m script.experiment.migrate_parquet
+```
+
+The migration removes CSV source files after successful conversion. A completed
+experiment retains only the final Parquet file; partial experiments retain
+converted Parquet chunks. Do not run a GPU sweep simultaneously with migration.
+
 ## Run
 
 ```bash
@@ -82,8 +94,9 @@ python -m script.experiment._runner --sweep test_pair_1k  # a specific sweep
 ```
 
 Runs are resumable: finished experiments are skipped and partial experiments
-continue from their last saved chunk. Failed experiments are retried in a fresh
-process.
+continue from their last saved chunk. Chunks are removed after the final
+Parquet file is committed; completed trials remain in `trial_metrics.parquet`.
+Failed experiments are retried in a fresh process.
 
 ## Outputs
 
@@ -96,8 +109,8 @@ experiment_results/{sweep}/
   sweep_snapshot.csv
   {layout}/{imageset}/{subset}/{source}/{model_id}/
     experiment_snapshot.yml
-    chunks/
-    trial_metrics.csv
+    trial_metrics.parquet
+    # chunks/*.parquet exists only while the experiment is unfinished
 ```
 
 - `sweep_snapshot.csv`: one row per experiment of the sweep with its keys,
@@ -105,8 +118,9 @@ experiment_results/{sweep}/
   Rewritten on every run.
 - `experiment_snapshot.yml`: the full definition of the experiment, plus
   `run_info` (torch, timm, device, finish time, accumulated duration).
-  On resume, the definition must match the current config.
-- `trial_metrics.csv`: one row per trial × position × metric variant
+  On resume, including skipped completed experiments, the definition must
+  match the current config.
+- `trial_metrics.parquet`: one row per trial × position × metric variant
   (`Trial_id, Position_index, Metric, Variant_id, Value`).
 
 ## Code

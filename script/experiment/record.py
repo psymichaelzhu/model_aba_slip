@@ -3,12 +3,25 @@ Read and write experiment records: snapshots, chunks, run info and sweep snapsho
 """
 
 # %% Imports
+import shutil
 from pathlib import Path
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 import yaml
 
 from config import CHUNK_SIZE, EXPERIMENT_RESULTS_DIR, PROJECT_ROOT
+
+
+# %% Trial metric storage
+METRIC_SCHEMA = pa.schema([
+    ("Trial_id", pa.int64()),
+    ("Position_index", pa.int64()),
+    ("Metric", pa.string()),
+    ("Variant_id", pa.string()),
+    ("Value", pa.float32()),
+])
 
 
 # %% Experiment snapshot
@@ -31,20 +44,31 @@ def _write_snapshot(experiment: dict, snapshot: dict):
     temp_path.replace(path)
 
 
-def prepare_experiment(experiment: dict):
-    """Create the experiment directory, then write or verify its snapshot."""
-    (Path(experiment["result_dir"]) / "chunks").mkdir(parents=True, exist_ok=True)
-
-    definition = {k: v for k, v in experiment.items() if k != "result_dir"}
+def validate_snapshot(experiment: dict):
+    """Verify an existing experiment definition, including completed experiments."""
     snapshot = _read_snapshot(experiment)
-
     if not snapshot:
-        _write_snapshot(experiment, definition)
         return
 
-    snapshot.pop("run_info", None)
-    if snapshot != definition:
+    definition = {k: v for k, v in experiment.items() if k != "result_dir"}
+    saved_definition = {k: v for k, v in snapshot.items() if k != "run_info"}
+    if saved_definition != definition:
         raise ValueError(f"Experiment definition changed: {_snapshot_path(experiment)}")
+
+
+def prepare_experiment(experiment: dict):
+    """Create the experiment directory, then write or verify its snapshot."""
+    result_dir = Path(experiment["result_dir"])
+    result_dir.mkdir(parents=True, exist_ok=True)
+
+    if not _read_snapshot(experiment):
+        definition = {k: v for k, v in experiment.items() if k != "result_dir"}
+        _write_snapshot(experiment, definition)
+    else:
+        validate_snapshot(experiment)
+
+    if not (result_dir / "trial_metrics.parquet").exists():
+        (result_dir / "chunks").mkdir(exist_ok=True)
 
 
 def _update_run_info(experiment: dict, run_info: dict):
@@ -56,7 +80,7 @@ def _update_run_info(experiment: dict, run_info: dict):
 # %% Chunks
 def _chunk_path(experiment: dict, start: int, end: int) -> Path:
     fmt = lambda i: f"{i // 1000}k" if i >= 1000 and i % 1000 == 0 else str(i)
-    return Path(experiment["result_dir"]) / "chunks" / f"chunk_{fmt(start)}_{fmt(end)}.csv"
+    return Path(experiment["result_dir"]) / "chunks" / f"chunk_{fmt(start)}_{fmt(end)}.parquet"
 
 
 def _chunk_ranges(experiment: dict) -> list[tuple[int, int]]:
@@ -76,42 +100,45 @@ def pending_chunks(experiment: dict) -> list[tuple[int, int]]:
 
 
 def save_chunk(experiment: dict, start: int, end: int, df: pd.DataFrame, run_info: dict):
-    """Save a chunk atomically and update the run info."""
+    """Save a Parquet chunk atomically and update the run info."""
     path = _chunk_path(experiment, start, end)
     temp_path = path.with_suffix(".tmp")
-    df.to_csv(temp_path, index=False)
+    table = pa.Table.from_pandas(df, schema=METRIC_SCHEMA, preserve_index=False)
+    pq.write_table(table, temp_path, compression="zstd")
     temp_path.replace(path)
     _update_run_info(experiment, run_info)
 
 
 def finalize_experiment(experiment: dict, run_info: dict):
-    """Merge all chunks into trial_metrics.csv and write the final run info."""
-    result_path = Path(experiment["result_dir"]) / "trial_metrics.csv"
+    """Merge Parquet chunks; remove chunks only after final output is saved."""
+    result_dir = Path(experiment["result_dir"])
+    result_path = result_dir / "trial_metrics.parquet"
     temp_path = result_path.with_suffix(".tmp")
 
-    with open(temp_path, "w", encoding="utf-8") as f:
-        for i, (start, end) in enumerate(_chunk_ranges(experiment)):
-            pd.read_csv(_chunk_path(experiment, start, end)).to_csv(
-                f, index=False, header=(i == 0)
-            )
+    with pq.ParquetWriter(temp_path, METRIC_SCHEMA, compression="zstd") as writer:
+        for start, end in _chunk_ranges(experiment):
+            writer.write_table(pq.read_table(_chunk_path(experiment, start, end)))
+
     temp_path.replace(result_path)
     _update_run_info(experiment, run_info)
+    shutil.rmtree(result_dir / "chunks")
 
 
 # %% Progress
 def read_progress(experiment: dict) -> dict:
     """Return status, completed trials and accumulated duration (minutes)."""
-    completed_trials = sum(
-        end - start for start, end in _chunk_ranges(experiment)
-        if _chunk_path(experiment, start, end).exists()
-    )
+    result_dir = Path(experiment["result_dir"])
+    completed = (result_dir / "trial_metrics.parquet").exists()
 
-    if (Path(experiment["result_dir"]) / "trial_metrics.csv").exists():
+    if completed:
         status = "completed"
-    elif completed_trials:
-        status = "partial"
+        completed_trials = experiment["trial_design"]["n_trials"]
     else:
-        status = "pending"
+        completed_trials = sum(
+            end - start for start, end in _chunk_ranges(experiment)
+            if _chunk_path(experiment, start, end).exists()
+        )
+        status = "partial" if completed_trials else "pending"
 
     run_info = _read_snapshot(experiment).get("run_info", {})
     return {
